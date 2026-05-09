@@ -1,6 +1,6 @@
 ---
 name: family-health
-version: 1.0.1
+version: 1.0.2
 description: "家人健康检查管理：体检/化验单/影像/专科报告自动归档+多年趋势+慢病关注点+PDF综合报告。与孕期 skill (pregnancy-care) 并存"
 metadata: {"openclaw":{"emoji":"🏥","requires":{"anyBins":["python3"]}}}
 ---
@@ -256,6 +256,7 @@ profile.md 关注点段示例：
 | `pregnancy/profile.md` 存在但姓名不匹配 | family-health 接管，但汇报里提一句"该姓名与孕期档案不同，确认吗？" |
 | 误把孕妇的报告归到 family-health | 用户一句"挪到孕期档案" → 移动文件 + 更新两边索引 |
 | PDF 提取失败（加密/损坏） | 告知具体错误，建议用户重新发送图片版本 |
+| **image 识别工具报错**（如 `Failed to optimize image`） | OpenClaw 平台问题，**不要重试同一张**。告知用户具体错误，提供 3 个选项：① 重新拍摄（光线足/对焦清/避免反光） ② 改发 PDF 版本（多数体检报告有 PDF） ③ 大图压缩或拆成小图分次发 |
 | 知识章节未找到 | 基于自身知识回答并声明"内置范围未覆盖该指标，以下基于通用医学知识" |
 
 ## 操作透明化
