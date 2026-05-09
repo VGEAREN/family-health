@@ -1,6 +1,6 @@
 ---
 name: family-health
-version: 1.0.0
+version: 1.0.1
 description: "家人健康检查管理：体检/化验单/影像/专科报告自动归档+多年趋势+慢病关注点+PDF综合报告。与孕期 skill (pregnancy-care) 并存"
 metadata: {"openclaw":{"emoji":"🏥","requires":{"anyBins":["python3"]}}}
 ---
@@ -71,6 +71,27 @@ family-health/
 4. 引导用户为该成员填 `members/<显示名>/profile.md`：姓名、别名、出生年月、性别、已知慢病、初始关注点
 5. 检查 Python 依赖：`python3 -c "import fitz, reportlab" 2>/dev/null`，缺失则提示：`pip3 install pymupdf reportlab`
 
+## 工具使用原则（必读）
+
+**优先使用 OpenClaw 平台原生工具，不要绕到 Bash/shell**：
+
+- 读 markdown 档案（profile.md / summary.md / records/*.md / members.md / concerns.md）→ 用 **Read 工具**
+- 读用户上传的 PDF → 用 **Read 工具**（多页 PDF 用 `pages` 参数分页读）
+- 读用户上传的图片 → **直接视觉识别**（LLM 内置能力）
+- 写新档案 → 用 **Write 工具**
+- 修改已有档案（追加趋势行 / 状态切换）→ 用 **Edit 工具**
+- 移动/重命名文件 → 用 **Bash mv**（这是平台允许的轻量 shell 操作）
+
+**脚本只在不可替代时调用**：
+- `scripts/generate-pdf.py` — 生成 PDF 必须用 reportlab，无法替代
+- `scripts/pdf-extract.py` — **仅作为 PDF 扫描版兜底**：当 PDF 没有文字层（扫描件）或 Read 出来的表格结构丢失，再调用此脚本把每页转 JPG 后视觉识别。**默认不用**。
+
+**反面示例**（不要这么做）：
+- ❌ 用 Bash `cat profile.md` 读档案
+- ❌ 用 Bash `grep` 搜成员
+- ❌ 默认调 `pdf-extract.py` 处理所有 PDF
+- ❌ 用 Python 脚本做"读文件→处理→写文件"的流水线
+
 ## 工作流：收到报告
 
 ### A. 决定是否接管
@@ -79,11 +100,10 @@ family-health/
 
 ### B. 识别成员归属
 
-1. 抽取报告文字：
-   - PDF：执行 `python3 {baseDir}/scripts/pdf-extract.py <input.pdf> family-health/members/<待定>/reports/<date>/`
-     - 文字优先用 `extracted.txt`
-     - 文字不全或表格丢失，再视觉读图（page_*.jpg）
-   - 图片:直接视觉读图
+1. **读取报告内容**（按上面"工具使用原则"）：
+   - PDF → Read 工具直接读，分页若有需要
+   - 图片 → 直接视觉识别
+   - 仅扫描版 PDF / 表格结构丢失时，才调用 `python3 {baseDir}/scripts/pdf-extract.py <input.pdf> <output_dir>` 转 200 DPI JPG 后视觉识别
 2. 识别报告里的姓名字段（一般在表头"姓名"右侧）
 3. 读 `family-health/members.md` 别名表
 4. 命中 → 对应成员目录
@@ -99,9 +119,11 @@ family-health/
 
 ### D. 落盘三件套（原子）
 
-1. 原图/原 PDF → `members/<name>/reports/YYYY-MM-DD/<原文件名>`
-2. OCR 原文（含 extracted.txt + 视觉读图补充）→ `members/<name>/ocr_results/YYYY-MM-DD-<type>-<idx>.md`
-3. 结构化报告 → `members/<name>/records/YYYY-MM-DD-<type>-<idx>.md`
+按"工具使用原则"使用 Write/Edit 工具：
+
+1. 原图/原 PDF → `members/<name>/reports/YYYY-MM-DD/<原文件名>`（保存原始上传文件）
+2. OCR 原文（视觉识别提取的全部文字）→ Write 到 `members/<name>/ocr_results/YYYY-MM-DD-<type>-<idx>.md`
+3. 结构化报告 → Write 到 `members/<name>/records/YYYY-MM-DD-<type>-<idx>.md`
 
 结构化报告格式：
 
