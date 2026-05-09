@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.DS_Store
+*.swp
+# 排除真实家人数据，只保留脱敏样本
+tests/real_data/
