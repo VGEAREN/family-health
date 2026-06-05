@@ -1,6 +1,6 @@
 ---
 name: family-health
-version: 1.1.0
+version: 1.2.0
 description: "家人健康检查管理：体检/化验单/影像/专科报告自动归档+多年趋势+慢病关注点+PDF综合报告。与孕期 skill (pregnancy-care) 并存"
 metadata: {"openclaw":{"emoji":"🏥","requires":{"anyBins":["python3"]}}}
 ---
@@ -69,7 +69,7 @@ family-health/
 2. 创建目录骨架：`mkdir -p family-health/members/<显示名>/{records,reports,ocr_results}`
 3. 创建空 `family-health/members.md` 与 `family-health/concerns.md`
 4. 引导用户为该成员填 `members/<显示名>/profile.md`：姓名、别名、出生年月、性别、已知慢病、初始关注点
-5. 检查 Python 依赖：`python3 -c "import fitz, reportlab" 2>/dev/null`，缺失则提示：`pip3 install pymupdf reportlab`
+5. 检查 Python 依赖：`python3 -c "import fitz, reportlab, PIL, numpy" 2>/dev/null`，缺失则提示：`pip3 install pymupdf reportlab Pillow numpy`（`fitz`=pymupdf 渲染 PDF，`PIL/numpy` 图片预处理）
 6. **初始化 `family-health/` 为本地 git 仓库**（详见后文「数据版本管理」段）：
    ```bash
    cd family-health
@@ -85,21 +85,67 @@ family-health/
 **优先使用 OpenClaw 平台原生工具，不要绕到 Bash/shell**：
 
 - 读 markdown 档案（profile.md / summary.md / records/*.md / members.md / concerns.md）→ 用 **Read 工具**
-- 读用户上传的 PDF → 用 **Read 工具**（多页 PDF 用 `pages` 参数分页读）
-- 读用户上传的图片 → **直接视觉识别**（LLM 内置能力）
+- **读用户上传的报告（识别数值/项目名）→ 一律走下文「识别协议」，视觉优先**：
+  - **PDF** → 先 `scripts/pdf-extract.py` 渲染每页 300DPI PNG，**视觉精读每页 PNG**；PDF 文字层（`extracted.txt` 或 Read 直读）**只做交叉校验，不可单独采信**（表格拍扁成字符流会让数值匹配到错误参考范围且静默不报）
+  - **图片** → 先质量/方向体检（`preprocess-image.py`），必要时读矫正增强图，再逐行转写
 - 写新档案 → 用 **Write 工具**
 - 修改已有档案（追加趋势行 / 状态切换）→ 用 **Edit 工具**
 - 移动/重命名文件 → 用 **Bash mv**（这是平台允许的轻量 shell 操作）
 
-**脚本只在不可替代时调用**：
-- `scripts/generate-pdf.py` — 生成 PDF 必须用 reportlab，无法替代
-- `scripts/pdf-extract.py` — **仅作为 PDF 扫描版兜底**：当 PDF 没有文字层（扫描件）或 Read 出来的表格结构丢失，再调用此脚本把每页转 JPG 后视觉识别。**默认不用**。
+**脚本职责**：
+- `scripts/pdf-extract.py` — **PDF 报告默认入口**：渲染每页 300DPI 无损 PNG 供视觉精读（不是兜底，是默认）
+- `scripts/preprocess-image.py` — 拍照件预处理：`--probe` 体检清晰度/分辨率，矫正方向+升采样+增强供精读
+- `scripts/generate-pdf.py` — 生成综合报告 PDF（reportlab，无法替代）
 
 **反面示例**（不要这么做）：
-- ❌ 用 Bash `cat profile.md` 读档案
-- ❌ 用 Bash `grep` 搜成员
-- ❌ 默认调 `pdf-extract.py` 处理所有 PDF
+- ❌ 用 Bash `cat profile.md` 读档案 / 用 Bash `grep` 搜成员
+- ❌ **只信 PDF 文字层 / Read 直读的表格就落库**（不渲染成图视觉核对）
+- ❌ **不做质量体检就在低清糊图上硬认数字**
 - ❌ 用 Python 脚本做"读文件→处理→写文件"的流水线
+
+## 识别协议（医疗级 · 最高优先，务必完整准确）
+
+**所有图片 / PDF 的读数都必须走本协议。** 医疗数据一个数字、一个项目名读错都可能误导判断，宁可多花一遍力气、宁可标"待核对"，也不要猜或漏。实测教训：低清横拍的电解质单里「急诊血钾 K+」被整页硬读误成「葡萄糖 GLU」，钾值丢失、凭空多出血糖，且因两者都≈4.0 而**静默无感**——本协议就是为杜绝这种错而设。
+
+### 0. 输入分流
+
+- **PDF** → `python3 {baseDir}/scripts/pdf-extract.py <pdf> <存放目录>`。产物 `pages/page_NNN.png`（每页 300DPI 无损图）是**精读主依据**；`extracted.txt` 仅交叉校验、**不可单独采信**；`_pdfmeta.json` 的 `image_only_pages` 是扫描页，**必须**视觉读。逐页按 1–5 处理。
+- **图片** → 直接进第 1 步。
+
+### 1. 质量与方向体检（读数前必做）
+
+1. 先体检：`python3 {baseDir}/scripts/preprocess-image.py <img> --probe`
+   - 返回 `ok:false`（`low_res` 或 `blurry`）→ **先别硬读**，按 `advice` 让用户重拍：靠近让报告填满取景框、对焦清晰、避免反光/阴影、平铺不折角。除非用户明确"就读这张尽力认"。
+2. 目测原图是否被拍歪（旋转 90/180/270 或明显倾斜）。有歪斜/低清/低对比 → 生成矫正增强图再读：
+   `python3 {baseDir}/scripts/preprocess-image.py <img> <out.png> --rotate <0|90|180|270>`
+   （脚本逆时针转正 + 自动纠小角度倾斜 + 升采样 + 增强）。**读增强图**，不读原图。
+
+### 2. 逐行逐字转写（第一遍 → 写入 ocr_results）
+
+把报告当"抄写"，**逐行**誊写，一项不省、不概括、不跳行：
+- 表头：姓名、性别、年龄、科室、临床诊断、样本号/报告编号、采集/报告时间、医院。
+- 每个检查项：序号 / 项目名（含括号缩写）/ 结果 / 提示箭头(↑↓) / 单位 / 参考范围。
+- 影像/专科报告：完整誊写"描述"与"印象/诊断"全文，不缩写。
+- 看不清的字符当场标 `〔?〕`，**不要猜**。
+
+### 3. 二次复核（第二遍 → 独立重读）
+
+重新读同一张图，只盯两类高错点：
+- **项目名**：中文名 + 括号缩写要对上（别把「血钾 K+」读成「葡萄糖 GLU」、「TG」读成「TC」）。
+- **数字**：小数点位置、`0/8`、`1/7`、`6/0`、有无 `<` `>` 或负号。
+逐格比对第一遍，**任何不一致 → 第三次放大重读**（`--crop 左,上,右,下`(0~1) 裁那列/那格放大）。
+
+### 4. 合理性 + 一致性校验
+
+- **项目名 vs 套餐**：电解质必含钾/钠/氯/钙/CO₂，不该冒出"葡萄糖"；血常规必含 WBC/RBC/HGB/PLT；血脂是 TC/TG/HDL/LDL。名不符套餐 → 多半认错，回第 3 步。
+- **值 vs 自身参考范围同量级**：某行结果与它自己的参考范围数量级差很多（如结果 `<0.300` 而参考 `30–135`）→ 警示**列错位或参考范围认错**，标 ⚠️。
+- **内部勾稽**（血常规）：HCT(%) ≈ 3×HGB(g/dL)；分类百分比合计≈100%；NEUT#+LYMPH#+MONO#+… ≈ WBC。对不上 → 复核。
+
+### 5. 不确定与反常 —— 标记，不洗白（红线）
+
+- 任何"看不清/拿不准"的格子，或"反常到不合理"的参考范围/数值，一律在该行状态写 `⚠️ 待核对`，并在汇报里**单列**请用户对着原件确认。
+- **严禁**把报告自身已打 ↑/↓ 异常标记的项，凭"通用参考范围"自行改判为正常（实测教训：CK 被报告标 ↑，却被洗白成"实际正常偏低"）。**报告印什么就记什么 + 标存疑**，由用户/医生定夺。
+- 这条优先级高于"让分析显得干净利落"，也优先于下文"参考范围 4 级 fallback"——fallback 是用来*分析*的，不是用来*改写报告原值*的。
 
 ## 工作流：收到报告
 
@@ -109,10 +155,7 @@ family-health/
 
 ### B. 识别成员归属
 
-1. **读取报告内容**（按上面"工具使用原则"）：
-   - PDF → Read 工具直接读，分页若有需要
-   - 图片 → 直接视觉识别
-   - 仅扫描版 PDF / 表格结构丢失时，才调用 `python3 {baseDir}/scripts/pdf-extract.py <input.pdf> <output_dir>` 转 200 DPI JPG 后视觉识别
+1. **读取报告内容**：按「识别协议」执行 —— PDF 先 `pdf-extract.py` 渲染每页 300DPI PNG 视觉精读；图片先 `preprocess-image.py` 体检/矫正后读；统一走 逐行转写 → 二次复核 → 合理性校验
 2. 识别报告里的姓名字段（一般在表头"姓名"右侧）
 3. 读 `family-health/members.md` 别名表
 4. 命中 → 对应成员目录
@@ -265,7 +308,8 @@ profile.md 关注点段示例：
 | OCR 提取不到姓名 | 不擅自归档，问用户"这是谁的？" |
 | 姓名匹配多个成员（撞名） | 列出所有候选让用户选 |
 | 报告里多人（联检 PDF） | 不自动拆，先告诉用户"识别到 N 个姓名，是否拆分归档？" |
-| OCR 数字明显错（小数点位置） | 关键指标 ≥3 倍偏离阈值时主动复核："识别到 TG=75.0，是 7.5 吗？" |
+| 数字/项目名拿不准 | **不猜**——标 `⚠️ 待核对` 并请用户对原件确认。触发复核的信号：项目名与套餐不符（电解质里冒出"葡萄糖"）、值与自身参考范围数量级不符（CK-MB `<0.3` vs 参考 `30–135`）、小数点位置可疑、报告打了 ↑↓ 却被判正常 |
+| 拍照件清晰度不足 | `preprocess-image.py --probe` 返回 `ok:false` 时先按 `advice` 让用户重拍，不在糊图上硬认数字 |
 | 报告印的参考范围与 indicator-ranges.md 冲突 | 优先报告印的，提醒"实验室参考与内置不同" |
 | Python 依赖缺失 | 给具体安装命令（pip3 install pymupdf reportlab），不继续后续步骤 |
 | `pregnancy/profile.md` 存在但姓名不匹配 | family-health 接管，但汇报里提一句"该姓名与孕期档案不同，确认吗？" |
